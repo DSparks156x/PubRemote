@@ -2,8 +2,9 @@
 #include "adc.h"
 #include "input_router.h"
 
-// Implemented in display.cpp: dispatches Return to the focused widget.
+// Implemented in display.cpp: dispatch Return to the focused widget.
 extern void ui_dispatch_activate();
+extern void ui_dispatch_activate_edge(bool pressed);
 #include "config.h"
 #include "driver/rtc_io.h"
 #include "esp_adc/adc_oneshot.h"
@@ -296,14 +297,21 @@ void thumbstick_init() {
   thumbstick_start();
 }
 
+// Return goes out on the press edge unless a screen claims double-press, since
+// SINGLE_CLICK only fires after release plus the double-click window. All button
+// callbacks run on the one iot_button timer task, so these need no locking.
+static bool click_consumed;
+static bool activate_held;
+
 static void button_single_click_cb(void *arg, void *usr_data) {
   ESP_LOGI(TAG, "BUTTON SINGLE CLICK");
   // A click is user activity whether or not a screen consumes it. This used to
   // be conditional, which was harmless only because nothing ever claimed the
   // slot - now navigation does.
   reset_sleep_timer();
-  // Delivered as a Return key so screens claim it with a FocusScope
-  ui_dispatch_activate();
+  if (!click_consumed) {
+    ui_dispatch_activate();
+  }
 }
 
 static button_callback_t registered_button_down_cb = NULL;
@@ -320,6 +328,12 @@ static void button_down_cb(void *arg, void *usr_data) {
   if (!handled) {
     remote_data.bt_c = 1;
   }
+
+  click_consumed = handled || !input_router_is_claimed(INPUT_ACTION_DOUBLE_PRESS);
+  if (!handled && click_consumed) {
+    activate_held = true;
+    ui_dispatch_activate_edge(true);
+  }
 }
 
 static button_callback_t registered_button_up_cb = NULL;
@@ -332,6 +346,11 @@ static void button_up_cb(void *arg, void *usr_data) {
 
   if (!handled) {
     remote_data.bt_c = 0;
+  }
+
+  if (activate_held) {
+    activate_held = false;
+    ui_dispatch_activate_edge(false);
   }
 }
 

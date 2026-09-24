@@ -27,11 +27,11 @@
 #include "remoteinputs.h"
 #include "screens/about_screen.h"
 #include "screens/boards_screen.h"
+#include "screens/flappy_screen.h"
+#include "screens/games_screen.h"
 #include "screens/imu_calibration_screen.h"
 #include "screens/input_calibration_screen.h"
 #include "screens/menu_screen.h"
-#include "screens/flappy_screen.h"
-#include "screens/games_screen.h"
 #include "screens/pairing_screen.h"
 #include "screens/settings_screen.h"
 #include "screens/stats_screen.h"
@@ -118,6 +118,7 @@ AppWindow *get_slint_window() {
 #include <atomic>
 
 static std::atomic<Screen> cached_active_screen(Screen::Splash);
+static std::atomic<bool> ui_platform_ready(false);
 
 extern "C" bool is_stats_screen_active() {
   return cached_active_screen.load() == Screen::Stats;
@@ -316,14 +317,26 @@ extern "C"
 // Default input handlers. Focus navigation is the right behaviour for a menu, so
 // it is registered as the router's default and any screen that wants the stick
 // for itself simply claims it.
-static void nav_dispatch_key(std::u8string_view key) {
+static void post_key_event(std::u8string_view key, bool press, bool release) {
+  // Buttons are initialised before the display, and posting before the platform exists is fatal
+  if (!ui_platform_ready.load()) {
+    return;
+  }
   slint::SharedString text(key);
-  slint::invoke_from_event_loop([text]() {
+  slint::invoke_from_event_loop([text, press, release]() {
     if (slint_window) {
-      slint_window->window().dispatch_key_press_event(text);
-      slint_window->window().dispatch_key_release_event(text);
+      if (press) {
+        slint_window->window().dispatch_key_press_event(text);
+      }
+      if (release) {
+        slint_window->window().dispatch_key_release_event(text);
+      }
     }
   });
+}
+
+static void nav_dispatch_key(std::u8string_view key) {
+  post_key_event(key, true, true);
 }
 
 static void nav_focus_next() {
@@ -338,6 +351,10 @@ static void nav_focus_previous() {
 // Slint way with a FocusScope rather than through a parallel registry.
 extern "C" void ui_dispatch_activate() {
   nav_dispatch_key(slint::platform::key_codes::Return);
+}
+
+extern "C" void ui_dispatch_activate_edge(bool pressed) {
+  post_key_event(slint::platform::key_codes::Return, pressed, !pressed);
 }
 
 static void connect_callbacks() {
@@ -534,6 +551,7 @@ static void slint_event_loop(void *pvParameters) {
 
   ESP_LOGI(TAG, "Initializing Slint ESP platform...");
   slint_esp_init(config);
+  ui_platform_ready.store(true);
 
   ESP_LOGI(TAG, "Creating AppWindow...");
   MEM_MARK("pre AppWindow");

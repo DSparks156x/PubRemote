@@ -4,8 +4,8 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "generated/app-window.h"
-#include "remote/display.h"
 #include "remote/buzzer.h"
+#include "remote/display.h"
 #include "remote/haptic.h"
 #include "remote/input_router.h"
 #include "remote/powermanagement.h"
@@ -64,17 +64,23 @@ static const uint16_t SHAPES[7][4] = {
   {NOTE_E5, Q}, {NOTE_B4, E}, {NOTE_C5, E}, {NOTE_D5, Q}, {NOTE_C5, E}, {NOTE_B4, E}, {NOTE_A4, Q}, {NOTE_A4, E},      \
       {NOTE_C5, E}, {NOTE_E5, Q}, {NOTE_D5, E}, {NOTE_C5, E}, {NOTE_B4, DQ}, {NOTE_C5, E}, {NOTE_D5, Q}, {NOTE_E5, Q}, \
       {NOTE_C5, Q}, {NOTE_A4, Q}, {NOTE_A4, Q}, {NOTE_REST, Q}, {NOTE_D5, DQ}, {NOTE_F5, E}, {NOTE_A5, Q},             \
-      {NOTE_G5, E}, {NOTE_F5, E}, {NOTE_E5, DQ}, {NOTE_C5, E}, {NOTE_E5, Q}, {NOTE_D5, E}, {NOTE_C5, E},               \
-      {NOTE_B4, Q}, {NOTE_B4, E}, {NOTE_C5, E}, {NOTE_D5, Q}, {NOTE_E5, Q}, {NOTE_C5, Q}, {NOTE_A4, Q},                \
-      {NOTE_A4, Q}, {NOTE_REST, Q}
+      {NOTE_G5, E}, {NOTE_F5, E}, {NOTE_E5, DQ}, {NOTE_C5, E}, {NOTE_E5, Q}, {NOTE_D5, E}, {NOTE_C5, E}, {NOTE_B4, Q}, \
+      {NOTE_B4, E}, {NOTE_C5, E}, {NOTE_D5, Q}, {NOTE_E5, Q}, {NOTE_C5, Q}, {NOTE_A4, Q}, {NOTE_A4, Q}, {              \
+    NOTE_REST, Q                                                                                                       \
+  }
 
 #define STRAIN_TWO                                                                                                     \
   {NOTE_E5, H}, {NOTE_C5, H}, {NOTE_D5, H}, {NOTE_B4, H}, {NOTE_C5, H}, {NOTE_A4, H}, {NOTE_GS4, H}, {NOTE_B4, H},     \
-      {NOTE_E5, H}, {NOTE_C5, H}, {NOTE_D5, H}, {NOTE_B4, H}, {NOTE_C5, Q}, {NOTE_E5, Q}, {NOTE_A5, H},                \
-      {NOTE_GS5, H}, {NOTE_REST, Q}
+      {NOTE_E5, H}, {NOTE_C5, H}, {NOTE_D5, H}, {NOTE_B4, H}, {NOTE_C5, Q}, {NOTE_E5, Q}, {NOTE_A5, H}, {NOTE_GS5, H}, \
+  {                                                                                                                    \
+    NOTE_REST, Q                                                                                                       \
+  }
 
 static const BuzzerNote MUSIC[] = {
-    STRAIN_ONE, STRAIN_ONE, STRAIN_TWO, STRAIN_TWO,
+    STRAIN_ONE,
+    STRAIN_ONE,
+    STRAIN_TWO,
+    STRAIN_TWO,
 };
 
 #undef BEAT_MS

@@ -1,14 +1,12 @@
-#ifndef __GAMES_SCREEN_H
-#define __GAMES_SCREEN_H
+#pragma once
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-void setup_games_properties();
+  void setup_games_properties();
 
 #ifdef __cplusplus
 }
-#endif
-
 #endif

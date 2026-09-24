@@ -57,6 +57,10 @@ bool input_router_dispatch(InputAction action) {
   return true;
 }
 
+bool input_router_is_claimed(InputAction action) {
+  return action < INPUT_ACTION_COUNT && current[action].cb != NULL;
+}
+
 void input_router_claim_board_forwarding() {
   forwards_to_board = true;
 }
