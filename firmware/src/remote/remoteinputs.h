@@ -17,9 +17,7 @@ extern "C"
   // Defined in settings.h
   struct InputPinSettings;
 
-  // Clicks are routed through input_router.h so there is one place a screen can
-  // claim them. These are the raw slots power management reserves for wake and
-  // shutdown; screens must not take them.
+  // Power management only; screens use input_router.h
   typedef enum {
     BUTTON_EVENT_DOWN,
     BUTTON_EVENT_UP,

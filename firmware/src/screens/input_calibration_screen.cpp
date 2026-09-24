@@ -173,9 +173,7 @@ static void calibration_task(void *pvParameters) {
 extern "C" void setup_input_calibration_properties() {
   calibration_step = CALIBRATION_STEP_START;
 
-  // The stick is what this screen measures, so deflecting it must not move
-  // focus. The button keeps its default Enter so a remote without touch can
-  // still advance the steps.
+  // The stick is being measured, so it must not move focus
   input_router_claim(INPUT_ACTION_STICK_UP, NULL, INPUT_ONCE);
   input_router_claim(INPUT_ACTION_STICK_DOWN, NULL, INPUT_ONCE);
   input_router_claim(INPUT_ACTION_STICK_LEFT, NULL, INPUT_ONCE);

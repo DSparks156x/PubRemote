@@ -3,8 +3,7 @@
 #include "settings.h"
 #include <string.h>
 
-// Expo squashes the mid range of the axis, so engage early and release late
-// rather than chattering around a single threshold.
+// Hysteresis; expo squashes the mid range, so engage early and release late
 #define STICK_ENGAGE 0.45f
 #define STICK_RELEASE 0.2f
 
@@ -17,9 +16,7 @@ static Binding defaults[INPUT_ACTION_COUNT];
 static Binding current[INPUT_ACTION_COUNT];
 static bool forwards_to_board;
 
-// Latched per axis so a held stick fires once and then repeats. The latch
-// deliberately survives a screen change: holding the stick through a transition
-// must not fire on the screen being entered.
+// Survives screen changes so a stick held through a transition doesn't fire on arrival
 static InputAction x_latch = INPUT_ACTION_COUNT;
 static InputAction y_latch = INPUT_ACTION_COUNT;
 static int64_t x_next_repeat_us;
@@ -66,12 +63,9 @@ void input_router_claim_board_forwarding() {
 }
 
 bool input_router_forwards_to_board() {
-  // Pocket mode is a lock rather than a screen, but it means the same thing here
   return forwards_to_board && !is_pocket_mode_enabled();
 }
 
-// Which action a signed axis is currently asserting, with hysteresis against
-// whatever it was asserting before.
 static InputAction axis_action(float value, InputAction latch, InputAction negative, InputAction positive) {
   if (latch == positive) {
     return value > STICK_RELEASE ? positive : INPUT_ACTION_COUNT;
@@ -110,10 +104,7 @@ static void drive_axis(float value, InputAction negative, InputAction positive, 
   }
 }
 
-// Axis signs are hardware convention, not arithmetic: on this remote a positive
-// js_y is the DOWN gesture. Getting this backwards inverts every consumer at
-// once, so check against a known-good mapping before changing it - the pre-router
-// nav code sent Tab (focus down the list) on js_y > 0.7.
+// Positive js_y is DOWN on this remote (the old nav sent Tab on js_y > 0.7)
 void input_router_poll_stick(float x, float y) {
   const int64_t now_us = esp_timer_get_time();
   drive_axis(x, INPUT_ACTION_STICK_LEFT, INPUT_ACTION_STICK_RIGHT, &x_latch, &x_next_repeat_us, now_us);

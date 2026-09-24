@@ -2,7 +2,7 @@
 #include "adc.h"
 #include "input_router.h"
 
-// Implemented in display.cpp: dispatch Return to the focused widget.
+// Implemented in display.cpp
 extern void ui_dispatch_activate();
 extern void ui_dispatch_activate_edge(bool pressed);
 #include "config.h"
@@ -298,17 +298,13 @@ void thumbstick_init() {
   thumbstick_start();
 }
 
-// Return goes out on the press edge unless a screen claims double-press, since
-// SINGLE_CLICK only fires after release plus the double-click window. All button
-// callbacks run on the one iot_button timer task, so these need no locking.
+// Return goes out on the press edge unless double-press is claimed, as SINGLE_CLICK waits
+// out the double-click window. Only touched from the iot_button task.
 static bool click_consumed;
 static bool activate_held;
 
 static void button_single_click_cb(void *arg, void *usr_data) {
   ESP_LOGI(TAG, "BUTTON SINGLE CLICK");
-  // A click is user activity whether or not a screen consumes it. This used to
-  // be conditional, which was harmless only because nothing ever claimed the
-  // slot - now navigation does.
   reset_sleep_timer();
   if (!click_consumed) {
     ui_dispatch_activate();

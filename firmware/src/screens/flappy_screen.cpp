@@ -19,26 +19,19 @@ static const char *TAG = "PUBREMOTE-FLAPPY_SCREEN";
 #define STATE_PLAYING 1
 #define STATE_OVER 2
 
-// Playfield units. The whole game lives in a 100x100 space; flappy.slint maps
-// that onto whatever square the panel can spare.
+// Playfield units: a 100x100 space that flappy.slint maps onto the panel
 #define FIELD 100.0f
 #define BIRD_X 26.0f
 #define BIRD_RX 3.0f
 #define BIRD_RY 2.6f
 #define GROUND_H 14.0f
 #define FLOOR_Y (FIELD - GROUND_H - BIRD_RY)
-// Not BIRD_RY: on a round panel the top of the play band is behind the bezel at
-// the bird's column, and a penguin the player cannot see is a penguin they lose.
+// Not BIRD_RY: on a round panel the band's top is behind the bezel at the bird's column
 #define CEILING_Y 7.0f
-// Gap centres keep this clear of the ceiling so the band above never has to be used.
 #define GAP_TOP_PAD 9.0f
 
-// Scaled from the original game's 1080 px/s^2 and -400 px/s over its 512px
-// screen. The flap arc, v^2/2g, is 13.8 units against 8.9 units of clearance
-// either side of the bird in the narrowest gap - so a single flap overshoots the
-// gap and has to be timed to coast through near its apex, which is the whole
-// difficulty of the original. Anything under about 1.0 there lets the player
-// hover and the game plays itself.
+// Scaled from the original (1080 px/s^2, -400 px/s over 512px). The flap arc must overshoot
+// the narrowest gap's clearance or the player can hover through.
 #define GRAVITY 210.0f
 #define FLAP_VELOCITY (-76.0f)
 #define MAX_FALL 110.0f
@@ -57,14 +50,12 @@ static const char *TAG = "PUBREMOTE-FLAPPY_SCREEN";
 #define SCROLL_STEP 0.3f
 
 #define WING_MS 110
-// Consecutive gaps are kept within reach of each other. Unbounded, the full
-// range needs more climb than the scroll speed leaves time for.
+// Keeps consecutive gaps reachable at the scroll speed
 #define GAP_Y_DELTA 20.0f
 
 #define HIGH_SCORE_KEY "flappy_hi"
 
-// buzzer_play_sequence starts the first note on the calling thread, so a
-// sequence of one is how a game sound gets no latency.
+// The first note starts on the calling thread, so short sequences play with no latency
 static const BuzzerNote SFX_FLAP[] = {{NOTE_A4, 40}};
 static const BuzzerNote SFX_SCORE[] = {{NOTE_E5, 60}, {NOTE_A5, 60}};
 static const BuzzerNote SFX_CRASH[] = {{NOTE_ERROR, 200}};
@@ -336,8 +327,7 @@ extern "C" void handle_flappy_flap() {
   publish_bird();
 }
 
-// The stick edge arrives on the UI poll task, so it hops to the event loop
-// before touching a model.
+// Runs on the UI poll task, so hop to the event loop
 static void flappy_stick_flap() {
   slint::invoke_from_event_loop([]() {
     if (is_flappy_screen_active()) {
@@ -402,8 +392,7 @@ extern "C" void setup_flappy_properties() {
   publish_bird();
   set_game_state(STATE_READY);
 
-  // Any stick deflection flaps. The four directions are claimed rather than just
-  // up so the default focus navigation cannot steal the Exit button mid-game.
+  // All four directions, so default focus navigation can't reach Exit mid-game
   input_router_claim(INPUT_ACTION_STICK_UP, flappy_stick_flap, INPUT_ONCE);
   input_router_claim(INPUT_ACTION_STICK_DOWN, flappy_stick_flap, INPUT_ONCE);
   input_router_claim(INPUT_ACTION_STICK_LEFT, flappy_stick_flap, INPUT_ONCE);

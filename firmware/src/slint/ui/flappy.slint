@@ -1,13 +1,5 @@
-// FlappyScreen - hidden game, reached from the arcade menu on the About screen.
-//
-// The firmware owns all game state; this file is a dumb renderer plus an input
-// decoder. Positions arrive in playfield units, a 100x100 space mapped onto the
-// whole panel, so the physics never sees pixels.
-//
-// The play band is inset inside those units rather than the playfield being
-// inset inside the panel: on a round panel the gap edges, the snow line and the
-// score all have to fall inside the visible circle at the columns they occupy,
-// while the ice and sky still run out to the bezel.
+// Firmware owns the game state; positions are 100x100 playfield units mapped onto the panel.
+// The play band is inset within those units so it stays inside a round panel's circle.
 
 import { Theme } from "theme.slint";
 import { AppButton } from "app-button.slint";
@@ -55,8 +47,7 @@ export component FlappyScreen inherits Rectangle {
         triggered => { root.tick(); }
     }
 
-    // The physical button reaches the UI as Return. Holding focus here is what
-    // keeps it away from the Exit button below.
+    // Holds focus so the button's Return flaps instead of pressing Exit
     FocusScope {
         width: 0;
         height: 0;
@@ -70,8 +61,7 @@ export component FlappyScreen inherits Rectangle {
         }
     }
 
-    // The Exit button is declared last, so it sits above this and takes its own
-    // taps instead of flapping.
+    // Exit is declared last so it takes its own taps
     TouchArea {
         width: 100%;
         height: 100%;
@@ -114,8 +104,7 @@ export component FlappyScreen inherits Rectangle {
             border-radius: root.corner;
         }
 
-        // Penguin. Nothing here can rotate, so the climb/dive read comes from the
-        // beak and feet shifting against a fixed body.
+        // Penguin. Nothing rotates, so beak and feet shift to show climb/dive
         Rectangle {
             x: 26 * root.ux - root.bird-w / 2;
             y: root.bird-y * root.uy - root.bird-h / 2;
@@ -336,7 +325,7 @@ export component FlappyScreen inherits Rectangle {
         }
     }
 
-    // Sits on the snow, clear of the bird's floor and inside a round panel's rim.
+    // On the snow, inside a round panel's rim
     AppButton {
         x: (root.width - self.width) / 2;
         y: Math.round(root.height * 0.96 / 1px) * 1px - self.height;

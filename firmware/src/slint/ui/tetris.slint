@@ -1,16 +1,10 @@
-// TetrisScreen - hidden game, reached by tapping the version number on the
-// About screen five times.
-//
-// The firmware owns all game state; this file is a dumb renderer plus an input
-// decoder. `cells` is a flat 10x20 model, one int per cell:
+// Firmware owns the game state. `cells` is a flat 10x20 model:
 //   0        empty
 //   1..7     locked/active mino, indexed by piece type
 //   9        line-clear flash
 //   11..17   ghost of piece 1..7
 //
-// Touch zones are derived from the well's own geometry: left of the well moves
-// left, right of it moves right, the well itself rotates on release, and a
-// vertical swipe on the well hard-drops or holds.
+// Touch: either side of the well shifts, tapping the well rotates, swiping it drops or holds
 
 import { Theme } from "theme.slint";
 import { AppButton } from "app-button.slint";
@@ -41,13 +35,12 @@ export component TetrisScreen inherits Rectangle {
 
     property <length> footer-h: Math.round(44px * Theme.scale / 1px) * 1px;
     property <length> footer-y: root.height - root.footer-h;
-    // A round panel only guarantees the inscribed square, so the board starts
-    // where that square does and stops at the footer either way.
+    // Round panels only guarantee the inscribed square
     property <length> usable-w: Theme.is-square-mode ? root.width : Math.round(root.width * 0.707 / 1px) * 1px;
     property <length> usable-y: Theme.is-square-mode ? 0px : Math.round((root.height - Math.round(root.height * 0.707 / 1px) * 1px) / 2 / 1px) * 1px;
     property <length> usable-h: root.footer-y - root.usable-y;
 
-    // Reserve a usable touch strip either side before the well takes the rest.
+    // Touch strips either side first; the well takes the rest
     property <length> lobe-min: Math.round(40px * Theme.scale / 1px) * 1px;
     property <int> cell-px: Math.max(3, Math.min(Math.floor(root.usable-h / 1px / 20), Math.floor((root.usable-w - root.lobe-min * 2) / 1px / 10)));
     property <length> cell: root.cell-px * 1px;
@@ -57,8 +50,7 @@ export component TetrisScreen inherits Rectangle {
     property <length> well-y: root.usable-y + Math.round((root.usable-h - root.well-h) / 2 / 1px) * 1px;
 
     property <length> lobe-pad: Math.round(4px * Theme.scale / 1px) * 1px;
-    // Round panels need the text pulled well off the rim or the crescent leaves
-    // no height for it.
+    // Round panels need the text pulled off the rim
     property <length> lobe-inset: Theme.is-square-mode ? root.lobe-pad : Math.round(root.width * 0.1 / 1px) * 1px;
     property <length> lobe-w: root.well-x - root.lobe-inset - root.lobe-pad;
     property <length> pcell: Math.max(3px, Math.round(root.cell * 0.5 / 1px) * 1px);
@@ -93,8 +85,7 @@ export component TetrisScreen inherits Rectangle {
         triggered => { root.tick(); }
     }
 
-    // The physical button reaches the UI as Return. Holding focus here is what
-    // keeps it away from the Exit button below.
+    // Holds focus so the button's Return reaches the game instead of Exit
     keys := FocusScope {
         width: 0;
         height: 0;
@@ -158,9 +149,7 @@ export component TetrisScreen inherits Rectangle {
         }
     }
 
-    // The well. Slint draws a border inside the element box and positions children
-    // from that same origin, so the frame is grown outward by its own width and
-    // the cells inset by it - otherwise the outermost blocks sit on the border.
+    // The well. Borders draw inside the box, so the frame grows outward and the cells inset by its width
     Rectangle {
         x: root.well-x - root.well-border;
         y: root.well-y - root.well-border;

@@ -7,21 +7,9 @@ extern "C"
 {
 #endif
 
-  // Routes the remote inputs that Slint cannot model itself.
-  //
-  // The primary button is NOT here: a click is dispatched to the UI as a Return
-  // key, so a screen claims it the ordinary Slint way, with a FocusScope. What is
-  // left is the analog joystick, which needs hysteresis and auto-repeat that a key
-  // event cannot express, plus the button double-click, which has no key
-  // equivalent.
-  //
-  // Defaults are installed once at boot and reinstalled by the screen transition
-  // before the incoming screen's setup hook runs, so a screen only ever says what
-  // it handles - never has to remember to release it.
-  //
-  // Button down/up and long-press-hold are deliberately absent: long press is
-  // power off, and a screen able to claim it could ship a remote you cannot turn
-  // off. Those stay with power management via register_primary_button_cb.
+  // Stick and double-press routing. Clicks reach Slint as Return instead, and long press stays
+  // with power management so no screen can take power-off. Screens claim in their setup hook;
+  // defaults are restored on every screen change.
   typedef enum {
     INPUT_ACTION_DOUBLE_PRESS,
     INPUT_ACTION_STICK_UP,
@@ -33,13 +21,10 @@ extern "C"
 
   typedef void (*input_action_cb_t)(void);
 
-  // Keyboard-style auto-repeat while the stick is held: one fire on the edge, then
-  // one every interval_ms once delay_ms has passed. Both are per binding, not
-  // global, because menu scrolling and a falling tetromino want very different
-  // feel - a shared delay would force one to be wrong.
+  // Fires on the edge, then every interval_ms once delay_ms has passed
   typedef struct {
-    uint16_t delay_ms;    // wait before the first repeat
-    uint16_t interval_ms; // 0 disables repeat: one fire per deflection
+    uint16_t delay_ms;
+    uint16_t interval_ms; // 0 = fire once per deflection
   } InputRepeat;
 
   static inline InputRepeat input_repeat(uint16_t delay_ms, uint16_t interval_ms) {
@@ -49,7 +34,6 @@ extern "C"
     return r;
   }
 
-// For actions that must not repeat - anything that toggles or navigates away.
 #define INPUT_ONCE input_repeat(0, 0)
 
   void input_router_set_default(InputAction action, input_action_cb_t cb, InputRepeat repeat);
@@ -60,14 +44,10 @@ extern "C"
   bool input_router_dispatch(InputAction action);
   bool input_router_is_claimed(InputAction action);
 
-  // Feeds joystick edge detection and auto-repeat. Call at a steady rate from a
-  // UI-priority task, never from the control input task.
+  // Call at a steady rate from a UI-priority task, never the control input task
   void input_router_poll_stick(float x, float y);
 
-  // Claimed by the one screen that hands raw input to the board, and cleared on
-  // every screen change like any other claim - so no shared code needs to know
-  // which screen that is. The getter also accounts for the pocket-mode lock, so
-  // callers get one authoritative answer rather than having to remember it.
+  // Cleared on every screen change like other claims; the getter also honours pocket mode
   void input_router_claim_board_forwarding();
   bool input_router_forwards_to_board();
 

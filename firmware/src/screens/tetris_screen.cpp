@@ -37,8 +37,7 @@ static const char *TAG = "PUBREMOTE-TETRIS_SCREEN";
 
 #define HIGH_SCORE_KEY "tetris_hi"
 
-// Rows are nibbles, most significant first; within a nibble the most
-// significant bit is the leftmost column.
+// One nibble per row, top row first; MSB is the leftmost column
 static const uint16_t SHAPES[7][4] = {
     {0x0F00, 0x2222, 0x00F0, 0x4444}, // I
     {0x8E00, 0x6440, 0x0E20, 0x44C0}, // J
@@ -49,11 +48,7 @@ static const uint16_t SHAPES[7][4] = {
     {0xC600, 0x2640, 0x0C60, 0x4C80}, // Z
 };
 
-// Korobeiniki, the traditional Russian folk melody the game is associated with.
-// Written out from the folk tune, which dates to the 1860s and is public domain.
-// Structure is the conventional one: first strain twice, second strain twice,
-// then the whole thing loops.
-// One number sets the tempo; the note lengths derive from it.
+// Korobeiniki (public domain folk tune): first strain twice, second strain twice, loop
 #define BEAT_MS 400 // quarter note, ~150 BPM
 #define Q BEAT_MS
 #define E (BEAT_MS / 2)
@@ -180,7 +175,7 @@ static int take_from_bag() {
   return bag[bag_pos++];
 }
 
-// The remote has one sound preference; treat "no startup sound" as "no sound".
+// The startup sound setting is the remote's only sound preference
 static bool sound_enabled() {
   return device_settings.startup_sound != STARTUP_SOUND_DISABLED;
 }
@@ -586,8 +581,7 @@ extern "C" void handle_tetris_tick() {
   render();
 }
 
-// Touch only. A finger latches held_zone so the tick can repeat it, and the
-// matching pointer-up clears it.
+// Touch only: latches held_zone for the tick to repeat until pointer-up
 extern "C" void handle_tetris_press(int zone) {
   reset_sleep_timer();
   if (game_state != STATE_PLAYING) {
@@ -603,9 +597,7 @@ extern "C" void handle_tetris_press(int zone) {
   render();
 }
 
-// Stick only, and it must NOT latch held_zone: the router already repeats a held
-// direction, and there is no stick release to clear the latch, so latching here
-// slides the piece forever.
+// Stick only. Must not latch held_zone: the router repeats, and nothing would clear the latch
 extern "C" void handle_tetris_shift(int dir) {
   reset_sleep_timer();
   if (game_state != STATE_PLAYING) {
@@ -660,8 +652,7 @@ extern "C" void handle_tetris_gesture(int kind) {
   render();
 }
 
-// Claimed handlers. The click arrives on the button task and the stick edges on
-// the UI poll task, so both hop to the event loop before touching a model.
+// Stick edges arrive on the UI poll task, so hop to the event loop
 static void post_to_event_loop(void (*action)()) {
   slint::invoke_from_event_loop([action]() {
     if (is_tetris_screen_active()) {
@@ -736,10 +727,7 @@ extern "C" void setup_tetris_properties() {
   publish_stats();
   set_game_state(STATE_READY);
 
-  // The click arrives as a Return key and is handled by the FocusScope in
-  // tetris.slint, so only the stick is claimed here. Rotation must not repeat;
-  // every held direction shares the numbers the touch zones use, so there is one
-  // place to tune how a held input feels.
+  // Held directions share the touch zones' repeat timing; rotation doesn't repeat
   const InputRepeat stick_repeat = input_repeat(DAS_DELAY_MS, DAS_REPEAT_MS);
   input_router_claim(INPUT_ACTION_STICK_UP, tetris_rotate_action, INPUT_ONCE);
   input_router_claim(INPUT_ACTION_STICK_DOWN, tetris_soft_drop, stick_repeat);
@@ -752,8 +740,7 @@ extern "C" void setup_tetris_properties() {
 
 extern "C" void teardown_tetris_properties() {
   stop_music();
-  // Claims are dropped by the screen transition, not here
   held_zone = -1;
-  // Models stay allocated: clearing them here blanks the well mid slide-out.
+  // Models stay allocated; clearing them blanks the well mid slide-out
   set_game_state(STATE_READY);
 }

@@ -41,8 +41,7 @@ static const int melody[] = {NOTE_C4, 100, NOTE_D4, 100, NOTE_E4, 100, NOTE_F4, 
 
 static const int melody_duration = 900;
 
-// A sequence is stepped faster than the idle tick so note edges land close to
-// where they were written; 50ms would smear anything shorter than a quarter.
+// Faster than the idle tick so short notes keep their timing
   #define SEQUENCE_TICK_MS 10
   #define NOTE_GAP_MS 18
 
@@ -62,7 +61,7 @@ void buzzer_stop() {
 #if BUZZER_ENABLED
   int duty = buzzer_off_duty();
   current_pattern = BUZZER_PATTERN_NONE; // Reset pattern
-  seq_notes = NULL;                      // Ends any sequence in progress
+  seq_notes = NULL;
 
   if (duty == current_duty) {
     return;
@@ -74,8 +73,7 @@ void buzzer_stop() {
 }
 
 #if BUZZER_ENABLED
-// Unlike buzzer_stop(), this only changes the pin - it leaves the pattern and
-// sequence running, which is what a rest between notes needs.
+// Silences the pin but leaves the pattern and sequence running, for rests
 static void set_tone_output(int frequency) {
   static int last_frequency = 0;
   int duty = frequency > 0 ? BUZZER_MAX_DUTY / 2 : buzzer_off_duty();
@@ -223,7 +221,7 @@ void buzzer_play_sequence(const BuzzerNote *notes, size_t count, bool repeat) {
   seq_count = count;
   seq_index = 0;
   seq_repeat = repeat;
-  seq_notes = notes; // Set last: the task treats a non-NULL pointer as armed
+  seq_notes = notes; // Set last: non-NULL arms the task
   sequence_begin_note();
 #else
   (void)notes;

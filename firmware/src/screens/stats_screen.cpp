@@ -304,8 +304,7 @@ extern "C" void setup_stats_properties() {
   ui_update_pending.store(false);
   stats_register_update_cb(stats_update_screen_display);
   input_router_claim(INPUT_ACTION_DOUBLE_PRESS, double_press_handler, INPUT_ONCE);
-  // Riding: the stick is throttle and goes to the board, so it must not also
-  // walk focus
+  // The stick is throttle here, not focus
   input_router_claim(INPUT_ACTION_STICK_UP, NULL, INPUT_ONCE);
   input_router_claim(INPUT_ACTION_STICK_DOWN, NULL, INPUT_ONCE);
   input_router_claim_board_forwarding();

@@ -316,11 +316,9 @@ extern "C"
   extern volatile uint32_t slint_esp_dirty_px;
 }
 
-// Default input handlers. Focus navigation is the right behaviour for a menu, so
-// it is registered as the router's default and any screen that wants the stick
-// for itself simply claims it.
+// Router defaults: the stick moves focus unless a screen claims it
 static void post_key_event(std::u8string_view key, bool press, bool release) {
-  // Buttons are initialised before the display, and posting before the platform exists is fatal
+  // Buttons init before the display; posting before the platform exists is fatal
   if (!ui_platform_ready.load()) {
     return;
   }
@@ -349,8 +347,7 @@ static void nav_focus_previous() {
   nav_dispatch_key(slint::platform::key_codes::Backtab);
 }
 
-// A button click is delivered as Return, so a screen claims it the ordinary
-// Slint way with a FocusScope rather than through a parallel registry.
+// Clicks arrive as Return so screens handle them with a FocusScope
 extern "C" void ui_dispatch_activate() {
   nav_dispatch_key(slint::platform::key_codes::Return);
 }
@@ -395,8 +392,7 @@ static void connect_callbacks() {
         teardown_flappy_properties();
       }
 
-      // Whatever the outgoing screen claimed is dropped here, so a screen only
-      // ever has to say what it handles, never to remember to release it.
+      // Drops the outgoing screen's claims
       input_router_restore_defaults();
 
       // Enter hooks
@@ -647,8 +643,6 @@ static void slint_event_loop(void *pvParameters) {
   vTaskDelete(NULL);
 }
 
-// Feeds the router the analog state it turns into direction edges. Button
-// clicks arrive on their own callback from remoteinputs.
 static void slint_input_task(void *pvParameters) {
 
 #if SHOW_FPS

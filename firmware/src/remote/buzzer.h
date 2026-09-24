@@ -17,9 +17,7 @@ extern "C"
     BUZZER_PATTERN_SOLID,
   } BuzzerPatttern;
 
-  // One step of a sequence. frequency NOTE_REST is a silence of the same length.
-  // duration_ms covers the whole step; a short articulation gap is taken from the
-  // end of it so repeated notes are distinguishable.
+  // NOTE_REST is silence. A short gap comes off the end of each step so repeats stay distinct.
   typedef struct {
     uint16_t frequency;
     uint16_t duration_ms;
@@ -28,8 +26,7 @@ extern "C"
   void buzzer_init();
   void buzzer_deinit();
 
-  // Plays notes in order, optionally looping. The array must outlive playback -
-  // pass a static one. buzzer_stop() ends it.
+  // notes must outlive playback (pass a static array)
   void buzzer_play_sequence(const BuzzerNote *notes, size_t count, bool repeat);
   bool buzzer_sequence_playing();
   void buzzer_set_pattern(BuzzerPatttern pattern);
