@@ -17,11 +17,10 @@ extern "C"
   // Defined in settings.h
   struct InputPinSettings;
 
+  // Power management only; screens use input_router.h
   typedef enum {
     BUTTON_EVENT_DOWN,
     BUTTON_EVENT_UP,
-    BUTTON_EVENT_PRESS,
-    BUTTON_EVENT_DOUBLE_PRESS,
     BUTTON_EVENT_LONG_PRESS_HOLD,
   } ButtonEvent;
 

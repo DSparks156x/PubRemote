@@ -7,10 +7,10 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
+#include "input_router.h"
 #include "peers.h"
 #include "receiver.h"
 #include "remoteinputs.h"
-#include "screens/stats_screen.h"
 #include "stats.h"
 #include "time.h"
 #include <freertos/FreeRTOS.h>
@@ -108,7 +108,7 @@ static void transmitter_task(void *pvParameters) {
 #endif
 
     RemoteData tx_msg = remote_data;
-    if (!is_stats_screen_active() || is_pocket_mode_enabled()) {
+    if (!input_router_forwards_to_board()) {
       tx_msg.js_y = 0.0f;
       tx_msg.js_x = 0.0f;
       tx_msg.bt_c = false;

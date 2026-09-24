@@ -1,5 +1,10 @@
 #include "remoteinputs.h"
 #include "adc.h"
+#include "input_router.h"
+
+// Implemented in display.cpp
+extern void ui_dispatch_activate();
+extern void ui_dispatch_activate_edge(bool pressed);
 #include "config.h"
 #include "driver/rtc_io.h"
 #include "esp_adc/adc_oneshot.h"
@@ -117,11 +122,7 @@ float convert_adc_to_axis(int adc_value, int min_val, int mid_val, int max_val, 
 
   // Apply expo
   if (expo > 1) {
-    bool negative = axis < 0;
-    axis = pow(axis, expo);
-    if (negative) {
-      axis = -axis;
-    }
+    axis = copysignf(powf(fabsf(axis), expo), axis);
   }
 
   // clamp between -1 and 1
@@ -293,17 +294,16 @@ void thumbstick_init() {
   thumbstick_start();
 }
 
-static button_callback_t registered_single_click_cb = NULL;
+// Return goes out on the press edge unless double-press is claimed, as SINGLE_CLICK waits
+// out the double-click window. Only touched from the iot_button task.
+static bool click_consumed;
+static bool activate_held;
+
 static void button_single_click_cb(void *arg, void *usr_data) {
   ESP_LOGI(TAG, "BUTTON SINGLE CLICK");
-  bool handled = false;
-
-  if (registered_single_click_cb) {
-    handled = registered_single_click_cb();
-  }
-
-  if (!handled) {
-    reset_sleep_timer();
+  reset_sleep_timer();
+  if (!click_consumed) {
+    ui_dispatch_activate();
   }
 }
 
@@ -321,6 +321,12 @@ static void button_down_cb(void *arg, void *usr_data) {
   if (!handled) {
     remote_data.bt_c = 1;
   }
+
+  click_consumed = handled || !input_router_is_claimed(INPUT_ACTION_DOUBLE_PRESS);
+  if (!handled && click_consumed) {
+    activate_held = true;
+    ui_dispatch_activate_edge(true);
+  }
 }
 
 static button_callback_t registered_button_up_cb = NULL;
@@ -334,20 +340,17 @@ static void button_up_cb(void *arg, void *usr_data) {
   if (!handled) {
     remote_data.bt_c = 0;
   }
+
+  if (activate_held) {
+    activate_held = false;
+    ui_dispatch_activate_edge(false);
+  }
 }
 
-static button_callback_t registered_double_click_cb = NULL;
 static void button_double_click_cb(void *arg, void *usr_data) {
   ESP_LOGI(TAG, "BUTTON DOUBLE CLICK");
-  bool handled = false;
-
-  if (registered_double_click_cb) {
-    handled = registered_double_click_cb();
-  }
-
-  if (!handled) {
-    reset_sleep_timer();
-  }
+  reset_sleep_timer();
+  input_router_dispatch(INPUT_ACTION_DOUBLE_PRESS);
 }
 
 static button_callback_t registered_long_press_hold_cb = NULL;
@@ -419,12 +422,6 @@ void register_primary_button_cb(ButtonEvent event, button_callback_t cb) {
   case BUTTON_EVENT_UP:
     registered_button_up_cb = cb;
     break;
-  case BUTTON_EVENT_PRESS:
-    registered_single_click_cb = cb;
-    break;
-  case BUTTON_EVENT_DOUBLE_PRESS:
-    registered_double_click_cb = cb;
-    break;
   case BUTTON_EVENT_LONG_PRESS_HOLD:
     registered_long_press_hold_cb = cb;
     break;
@@ -442,12 +439,6 @@ void unregister_primary_button_cb(ButtonEvent event) {
     break;
   case BUTTON_EVENT_UP:
     registered_button_up_cb = NULL;
-    break;
-  case BUTTON_EVENT_PRESS:
-    registered_single_click_cb = NULL;
-    break;
-  case BUTTON_EVENT_DOUBLE_PRESS:
-    registered_double_click_cb = NULL;
     break;
   case BUTTON_EVENT_LONG_PRESS_HOLD:
     registered_long_press_hold_cb = NULL;
