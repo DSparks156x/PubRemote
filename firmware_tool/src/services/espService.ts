@@ -1,5 +1,6 @@
 /* oxlint-disable no-control-regex */
 import { ESPLoader, Transport, LoaderOptions } from 'esptool-js';
+import type { SettingsTransport } from './settingsProtocol';
 import { delay } from '../utils/delay';
 import { LogEntry, TerminalService } from './terminal';
 import { FirmwareFiles } from '../types';
@@ -54,6 +55,8 @@ const getEspLogInfo = (
   data: string;
   type: LogEntry['type'];
 } => {
+  // JSON frames are already escaped; skip terminal cleanup so Unicode survives.
+  if (data.startsWith('{')) return { data: data.trimEnd(), type: 'info' };
   // Convert carriage returns to newlines for proper display
   const normalizedData = data.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const cleanedData = removeAnsiEscapeCodes(normalizedData.trimEnd());
@@ -72,8 +75,17 @@ export class ESPService {
   private espLoader: ESPLoader | null = null;
   private terminal?: TerminalService;
   private isConnecting: boolean = false;
+  private bootloaderReady = false;
+  private isFlashing = false;
+  private commandGeneration = 0;
+  private commandWrites: Promise<void> = Promise.resolve();
+  private consoleTransactions: Promise<void> = Promise.resolve();
+  private consoleFrame?: (data: string) => boolean;
+  private cancelConsoleTransaction?: () => void;
+  private consoleNeedsResync = false;
   private monitorSerial: boolean = false;
   private logBuffer: string = '';
+  private logDecoder = new TextDecoder();
   private port: SerialPort | null = null;
 
   private logListeners: Array<LogListener> = [
@@ -83,9 +95,6 @@ export class ESPService {
       return true;
     },
   ];
-
-  // Silent execution implementation
-  private silentListeners: LogListener[] = [];
 
   public onReboot?: () => void;
   public onDisconnect?: () => void;
@@ -129,15 +138,8 @@ export class ESPService {
     this.terminal?.writeLine(message, type);
   };
 
-  // Override emitToListeners to check silent listeners first
   private emitToListeners = (...args: Parameters<LogListener>) => {
-    // Check silent listeners first
-    for (const listener of this.silentListeners) {
-      if (listener(...args)) {
-        return;
-      }
-    }
-
+    if (this.consoleFrame?.(args[0])) return;
     for (const listener of this.logListeners) {
       if (listener(...args)) {
         break; // Break on first listener that marks log as handled
@@ -150,18 +152,27 @@ export class ESPService {
     if (typeof data === 'string') {
       this.logBuffer += data;
     } else {
-      this.logBuffer += new TextDecoder().decode(data);
+      this.logBuffer += this.logDecoder.decode(data, { stream: true });
     }
 
     // Process complete lines
     while (this.logBuffer.includes('\n')) {
       const splitIndex = this.logBuffer.indexOf('\n');
-      const line = this.logBuffer.slice(0, splitIndex);
+      let line = this.logBuffer.slice(0, splitIndex);
       this.logBuffer = this.logBuffer.slice(splitIndex + 1);
+
+      // Another task's log can follow the prompt on the same line.
+      const cleaned = removeAnsiEscapeCodes(line).trimStart();
+      if (cleaned.startsWith('pubconsole>')) {
+        this.emitToListeners('pubconsole>', 'info');
+        line = cleaned.slice('pubconsole>'.length).trimStart();
+      }
 
       const logInfo = getEspLogInfo(line);
       if (logInfo.data) {
         this.emitToListeners(logInfo.data, logInfo.type);
+        // JSON values may contain "rst:" or "Backtrace:"; they aren't diagnostics.
+        if (logInfo.data.startsWith('{')) continue;
 
         // Check for backtrace
         if (logInfo.data.includes('Backtrace:')) {
@@ -205,77 +216,95 @@ export class ESPService {
     }
   };
 
-  getVersionInfo = async (): Promise<{ version: string; variant: string; hardware: string }> => {
+  getVersionInfo = async (): Promise<{
+    version: string;
+    variant: string;
+    hardware: string;
+  }> => {
     const timeout = 5000;
     let version: string | null = null;
     let variant: string | null = null;
     let hardware: string | null = null;
 
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        this.removeLogListener(versionLogListener);
-        reject(new Error('Timeout while waiting for version response'));
-      }, timeout);
+    return this.withConsoleTransaction(
+      (transport) =>
+        new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            transport.removeLogListener(versionLogListener);
+            reject(new Error('Timeout while waiting for version response'));
+          }, timeout);
 
-      // Request firmware info
-      this.log('Fetching firmware information...');
-      const versionLogListener: LogListener = (data) => {
-        if (data.toLocaleLowerCase().startsWith('version:')) {
-          // regex to match variant
-          version = data.replace(/^version:\s*/i, '').trim();
-        }
+          // Request firmware info
+          this.log('Fetching firmware information...');
+          const versionLogListener: LogListener = (data) => {
+            if (data.toLocaleLowerCase().startsWith('version:')) {
+              // regex to match variant
+              version = data.replace(/^version:\s*/i, '').trim();
+            }
 
-        if (data.toLowerCase().startsWith('variant:')) {
-          variant = data.replace(/^variant:\s*/i, '').trim();
-        }
+            if (data.toLowerCase().startsWith('variant:')) {
+              variant = data.replace(/^variant:\s*/i, '').trim();
+            }
 
-        if (data.toLowerCase().startsWith('hardware:')) {
-          hardware = data.replace(/^hardware:\s*/i, '').trim();
-        }
+            if (data.toLowerCase().startsWith('hardware:')) {
+              hardware = data.replace(/^hardware:\s*/i, '').trim();
+            }
 
-        if (data === 'pubconsole>' && version && variant && hardware) {
-          clearTimeout(timeoutId);
-          this.removeLogListener(versionLogListener);
-          this.log('Version info successfully loaded');
-          resolve({ version, variant, hardware });
-          return true;
-        }
+            if (data === 'pubconsole>' && version && variant && hardware) {
+              clearTimeout(timeoutId);
+              transport.removeLogListener(versionLogListener);
+              this.log('Version info successfully loaded');
+              resolve({ version, variant, hardware });
+              return true;
+            }
 
-        return true; // Mark log as handled
-      };
-      this.addLogListener(versionLogListener);
-      this.sendCommand('version');
-    });
+            return true; // Mark log as handled
+          };
+          transport.addLogListener(versionLogListener);
+          transport.sendCommand('version').catch((error) => {
+            clearTimeout(timeoutId);
+            transport.removeLogListener(versionLogListener);
+            reject(error);
+          });
+        }),
+    );
   };
 
   checkCoredump = async (): Promise<boolean> => {
-    return new Promise((resolve) => {
-      const timeout = 2000;
-      const timeoutId = setTimeout(() => {
-        this.removeLogListener(coreDumpListener);
-        resolve(false);
-      }, timeout);
+    return this.withConsoleTransaction(
+      (transport) =>
+        new Promise((resolve) => {
+          const timeout = 2000;
+          const timeoutId = setTimeout(() => {
+            transport.removeLogListener(coreDumpListener);
+            resolve(false);
+          }, timeout);
 
-      const coreDumpListener: LogListener = (data) => {
-        if (data.includes('coredump: found')) {
-          clearTimeout(timeoutId);
-          this.removeLogListener(coreDumpListener);
-          this.log('Core dump detected on device.', 'info');
-          resolve(true);
-          return true;
-        }
-        if (data.includes('coredump: none')) {
-          clearTimeout(timeoutId);
-          this.removeLogListener(coreDumpListener);
-          resolve(false);
-          return true;
-        }
-        return false;
-      };
+          const coreDumpListener: LogListener = (data) => {
+            if (data.includes('coredump: found')) {
+              clearTimeout(timeoutId);
+              transport.removeLogListener(coreDumpListener);
+              this.log('Core dump detected on device.', 'info');
+              resolve(true);
+              return true;
+            }
+            if (data.includes('coredump: none')) {
+              clearTimeout(timeoutId);
+              transport.removeLogListener(coreDumpListener);
+              resolve(false);
+              return true;
+            }
+            return false;
+          };
 
-      this.addLogListener(coreDumpListener);
-      this.sendCommand('coredump_info');
-    });
+          transport.addLogListener(coreDumpListener);
+          transport.sendCommand('coredump_info').catch(() => {
+            clearTimeout(timeoutId);
+            transport.removeLogListener(coreDumpListener);
+            resolve(false);
+          });
+        }),
+    );
   };
 
   connect = async (): Promise<{
@@ -294,6 +323,8 @@ export class ESPService {
 
     try {
       this.isConnecting = true;
+      ++this.commandGeneration;
+      this.bootloaderReady = false;
       this.log('Requesting serial port...');
 
       if (!navigator.serial) {
@@ -322,10 +353,6 @@ export class ESPService {
 
       const loader = new ESPLoader(loaderOptions);
 
-      // ... (existing loader.main(), loader.sync(), chip info reading ...)
-      // I need to keep the context lines for the replace, so I will target the specific block I'm changing
-      // But wait, the previous tool call modified the file, line numbers might shifted.
-      // I will rely on the Context match.
       await loader.main();
       await loader.sync();
 
@@ -363,10 +390,9 @@ export class ESPService {
       let hasCoredump: boolean = false;
 
       if (!hasFirmware) {
-        // Fresh chip: keep the loader ready in bootloader mode. Do NOT reboot
-        // into normal mode. flash() re-enters the bootloader on its own, so the
-        // device is ready for a first-time install right away.
+        // Reuse the synced stub: resetting a blank ESP32-S3 can drop its native USB.
         this.espLoader = loader;
+        this.bootloaderReady = true;
         this.log(
           'No firmware detected. Device is in bootloader mode and ready for a first-time install.',
           'success',
@@ -459,13 +485,208 @@ export class ESPService {
     return encoder.encode(command + '\n');
   }
 
-  async sendCommand(command: string, silent: boolean = false): Promise<void> {
+  private invalidateConsoleConnection() {
+    const wasConnected = this.isConnected();
+    void this.disconnect();
+    if (wasConnected) this.onDisconnect?.();
+  }
+
+  // Hold the console until its prompt returns, so late output never answers the next command.
+  withConsoleTransaction<T>(
+    operation: (transport: SettingsTransport) => Promise<T>,
+    signal?: AbortSignal,
+    silentDrain = true,
+  ): Promise<T> {
+    const generation = this.commandGeneration;
+    const loader = this.espLoader;
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(new Error('Settings request cancelled'));
+      signal?.addEventListener('abort', abort, { once: true });
+      const run = async () => {
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        if (!loader || this.espLoader !== loader || generation !== this.commandGeneration) {
+          reject(new Error('Connection changed before the command could be sent'));
+          return;
+        }
+        if (this.bootloaderReady || this.isFlashing) {
+          reject(
+            new Error(
+              'Device is in bootloader mode. Install firmware before using console commands.',
+            ),
+          );
+          return;
+        }
+        if (this.consoleNeedsResync) {
+          try {
+            await this.resyncConsole();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+          if (signal?.aborted) {
+            abort();
+            return;
+          }
+        }
+        let sent = false;
+        let finished = false;
+        let promptSeen = false;
+        let finishPrompt = () => {};
+        let interrupt = () => {};
+        const prompt = new Promise<void>((done) => {
+          finishPrompt = done;
+        });
+        const interrupted = new Promise<void>((done) => {
+          interrupt = done;
+        });
+        const listeners = new Set<LogListener>();
+        const frame = (data: string) => {
+          if (data.trim() === 'pubconsole>') {
+            promptSeen = true;
+            finishPrompt();
+          }
+          return finished && silentDrain;
+        };
+        const cancel = () => {
+          reject(new Error('Console connection changed'));
+          interrupt();
+          finishPrompt();
+        };
+        this.consoleFrame = frame;
+        this.cancelConsoleTransaction = cancel;
+        const timer = setTimeout(() => {
+          const error = new Error(
+            'Console did not return to its prompt. Waiting for the device before sending more commands.',
+          );
+          this.log(error.message, 'error');
+          this.consoleNeedsResync = true;
+          reject(error);
+          interrupt();
+          finishPrompt();
+        }, 7000);
+        const transport: SettingsTransport = {
+          addLogListener: (listener) => {
+            listeners.add(listener);
+            this.addLogListener(listener);
+          },
+          removeLogListener: (listener) => {
+            listeners.delete(listener);
+            this.removeLogListener(listener);
+          },
+          sendCommand: async (command, silent) => {
+            sent = true;
+            try {
+              await this.writeCommand(command, silent);
+            } catch (error) {
+              // A partial/failed write leaves command framing uncertain.
+              reject(error);
+              finishPrompt();
+              this.invalidateConsoleConnection();
+              throw error;
+            }
+          },
+        };
+        try {
+          const response = Promise.resolve()
+            .then(() => operation(transport))
+            .then(resolve, reject)
+            .finally(() => {
+              finished = true;
+            });
+          await Promise.race([response, interrupted]);
+          if (sent && !promptSeen) await prompt;
+        } finally {
+          clearTimeout(timer);
+          for (const listener of listeners) this.removeLogListener(listener);
+          if (this.consoleFrame === frame) this.consoleFrame = undefined;
+          if (this.cancelConsoleTransaction === cancel) this.cancelConsoleTransaction = undefined;
+        }
+      };
+      this.consoleTransactions = this.consoleTransactions
+        .then(run)
+        .catch(reject)
+        .finally(() => {
+          signal?.removeEventListener('abort', abort);
+        });
+    });
+  }
+
+  // A bare newline prints a fresh prompt; output before the last prompt is stale.
+  private async resyncConsole(): Promise<void> {
+    let seen = false;
+    let quiet: ReturnType<typeof setTimeout> | undefined;
+    let settle = () => {};
+    let fail: (error: Error) => void = () => {};
+    const synced = new Promise<void>((resolve, reject) => {
+      settle = resolve;
+      fail = reject;
+    });
+    synced.catch(() => {});
+    const busy = new Error('Console busy, waiting for the device. Try again shortly.');
+    const deadline = setTimeout(() => (seen ? settle() : fail(busy)), 3000);
+    const frame = (data: string) => {
+      if (data.trim() !== 'pubconsole>') return false;
+      seen = true;
+      clearTimeout(quiet);
+      quiet = setTimeout(settle, 250);
+      return true;
+    };
+    const cancel = () => fail(new Error('Console connection changed'));
+    this.consoleFrame = frame;
+    this.cancelConsoleTransaction = cancel;
+    try {
+      try {
+        await this.writeCommand('', true);
+      } catch (error) {
+        this.invalidateConsoleConnection();
+        throw error;
+      }
+      await synced;
+      this.consoleNeedsResync = false;
+      this.log('Console responding again');
+    } finally {
+      clearTimeout(deadline);
+      clearTimeout(quiet);
+      if (this.consoleFrame === frame) this.consoleFrame = undefined;
+      if (this.cancelConsoleTransaction === cancel) this.cancelConsoleTransaction = undefined;
+    }
+  }
+
+  sendCommand(command: string, silent = false): Promise<void> {
+    return this.withConsoleTransaction(
+      (transport) => transport.sendCommand(command, silent),
+      undefined,
+      silent,
+    );
+  }
+
+  private async writeCommand(command: string, silent: boolean = false): Promise<void> {
     if (!this.espLoader || !this.isConnected()) {
       throw new Error('Device not connected');
     }
 
+    if (this.bootloaderReady || this.isFlashing) {
+      throw new Error(
+        'Device is in bootloader mode. Install firmware before using console commands.',
+      );
+    }
+
+    const loader = this.espLoader;
+    const generation = this.commandGeneration;
+    // Web Serial allows one writer at a time, so queue whole commands.
+    const write = this.commandWrites.then(async () => {
+      if (this.espLoader !== loader || generation !== this.commandGeneration) {
+        throw new Error('Connection changed before the command could be sent');
+      }
+      await loader.transport.write(this.encodeCommand(command));
+    });
+    // A failed write must not block later commands.
+    this.commandWrites = write.catch(() => {});
     try {
-      await this.espLoader.transport.write(this.encodeCommand(command));
+      await write;
       if (!silent) {
         this.log(`Sent command: ${command}`, 'info');
       }
@@ -483,21 +704,36 @@ export class ESPService {
     eraseFlash: boolean = true,
     onFlashProgess: (update: { status: string; progress: number }) => void,
   ): Promise<void> {
+    if (this.isFlashing) {
+      throw new Error('Firmware flash already in progress');
+    }
     if (!this.espLoader) {
       throw new Error('Not connected to device');
     }
 
+    const loader = this.espLoader;
+    this.isFlashing = true;
+    ++this.commandGeneration;
+    this.cancelConsoleTransaction?.();
     try {
+      await this.commandWrites;
       this.removeSerialMonitor();
-      await delay(200); // Give device time to boot
-      await this.espLoader.transport.disconnect();
-      this.log('Rebooting into bootloader...');
-      await this.espLoader.main();
-      await this.espLoader.sync();
+      if (this.bootloaderReady) {
+        this.log('Using existing bootloader connection...');
+      } else {
+        await delay(200); // Let the serial monitor stop before closing its port.
+        await loader.transport.disconnect();
+        this.log('Rebooting into bootloader...');
+        await loader.main();
+        await loader.sync();
+        if (this.espLoader !== loader)
+          throw new Error('Device disconnected while entering bootloader');
+        this.bootloaderReady = true;
+      }
 
       if (eraseFlash) {
         this.log('Erasing flash...');
-        await this.espLoader.eraseFlash();
+        await loader.eraseFlash();
       }
 
       const files: Array<{
@@ -530,7 +766,7 @@ export class ESPService {
       }
 
       this.log('Writing firmware...');
-      await this.espLoader.writeFlash({
+      await loader.writeFlash({
         fileArray: files.map(({ data, address }) => ({ data, address })),
         flashSize: 'keep',
         eraseAll: false, // Handled above
@@ -550,14 +786,18 @@ export class ESPService {
 
       this.log('Flash complete', 'success');
       this.log('Resetting device...');
-      await this.espLoader.hardReset();
+      this.bootloaderReady = false;
+      await loader.hardReset();
       this.log('Device reset and ready', 'success');
     } catch (error) {
+      this.bootloaderReady = false;
       this.log(
         `Flash failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'error',
       );
       throw error;
+    } finally {
+      this.isFlashing = false;
     }
   }
 
@@ -575,6 +815,8 @@ export class ESPService {
   }
 
   addSerialMonitor() {
+    this.logBuffer = '';
+    this.logDecoder = new TextDecoder();
     const monitor = async () => {
       while (this.monitorSerial) {
         const val = await this.espLoader!.transport.rawRead();
@@ -595,62 +837,66 @@ export class ESPService {
   }
 
   async disconnect(): Promise<void> {
+    ++this.commandGeneration;
+    this.cancelConsoleTransaction?.();
+    this.consoleNeedsResync = false;
+    const loader = this.espLoader;
+    const port = this.port;
+    this.espLoader = null;
+    this.port = null;
+    this.bootloaderReady = false;
     this.removeSerialMonitor();
-    if (this.port) {
-      this.port.removeEventListener('disconnect', this.handlePortDisconnect);
+    if (port) {
+      port.removeEventListener('disconnect', this.handlePortDisconnect);
     }
 
-    if (this.espLoader) {
+    if (loader) {
       try {
-        await this.espLoader.transport.disconnect();
+        await this.commandWrites;
+        await loader.transport.disconnect();
       } catch {
         // Ignore disconnect errors
       }
-      this.espLoader = null;
       this.log('Disconnected from device');
     }
-
-    // safe to null port now
-    this.port = null;
   }
 
   // Execute a command silently and capture output
   executeCommand = async (command: string, timeout = 2000): Promise<string[]> => {
-    return new Promise((resolve) => {
-      const lines: string[] = [];
-      const timeoutId = setTimeout(() => {
-        this.removeSilentListener(listener);
-        console.warn(`[executeCommand] Timeout waiting for prompt for command: "${command}"`);
-        resolve(lines); // return what we have so far
-      }, timeout);
+    return this.withConsoleTransaction(
+      (transport) =>
+        new Promise((resolve, reject) => {
+          const lines: string[] = [];
+          const timeoutId = setTimeout(() => {
+            transport.removeLogListener(listener);
+            console.warn(`[executeCommand] Timeout waiting for prompt for command: "${command}"`);
+            resolve(lines); // return what we have so far
+          }, timeout);
 
-      const listener: LogListener = (data) => {
-        const trimmed = data.trim();
-        if (trimmed === 'pubconsole>') {
-          clearTimeout(timeoutId);
-          this.removeSilentListener(listener);
-          resolve(lines);
-          return true;
-        }
-        // Filter out echo if present (simple check)
-        if (trimmed !== command.trim()) {
-          lines.push(data.trimEnd());
-        }
-        return true; // Swallow the log
-      };
+          const listener: LogListener = (data) => {
+            const trimmed = data.trim();
+            if (trimmed === 'pubconsole>') {
+              clearTimeout(timeoutId);
+              transport.removeLogListener(listener);
+              resolve(lines);
+              return true;
+            }
+            // Filter out echo if present (simple check)
+            if (trimmed !== command.trim()) {
+              lines.push(data.trimEnd());
+            }
+            return true; // Swallow the log
+          };
 
-      this.addSilentListener(listener);
-      this.sendCommand(command, true);
-    });
+          transport.addLogListener(listener);
+          transport.sendCommand(command, true).catch((error) => {
+            clearTimeout(timeoutId);
+            transport.removeLogListener(listener);
+            reject(error);
+          });
+        }),
+    );
   };
-
-  private addSilentListener(listener: LogListener) {
-    this.silentListeners.push(listener);
-  }
-
-  private removeSilentListener(listener: LogListener) {
-    this.silentListeners = this.silentListeners.filter((l) => l !== listener);
-  }
 
   getCompletions = async (prefix: string): Promise<string[]> => {
     // Don't autocomplete if empty or just whitespace

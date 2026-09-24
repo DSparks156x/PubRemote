@@ -1,10 +1,9 @@
-// Host tests pre-define this guard to skip the header, so it can't be #pragma once.
-#ifndef __SETTINGS_H
-#define __SETTINGS_H
+#pragma once
 #include "display.h"
 #include "esp_system.h"
 #include "led.h"
 #include "nvs_flash.h"
+#include "settings_types.h"
 
 #include "comms.h"
 #include <esp_now.h>
@@ -41,8 +40,6 @@ extern "C"
 
   void save_input_calibration();
 
-  void save_input_pins();
-
   // Restore the default range for axes whose pin changed
   void reset_axis_calibration(bool reset_x, bool reset_y);
 
@@ -60,143 +57,12 @@ extern "C"
 
   char *get_wifi_password();
 
-  typedef enum {
-    AUTO_OFF_DISABLED,
-    AUTO_OFF_2_MINUTES,
-    AUTO_OFF_5_MINUTES,
-    AUTO_OFF_10_MINUTES,
-    AUTO_OFF_20_MINUTES,
-    AUTO_OFF_30_MINUTES,
-    AUTO_OFF_COUNT // Sentinel - keep last
-  } AutoOffOptions;
-
-  typedef enum {
-    TEMP_UNITS_CELSIUS,
-    TEMP_UNITS_FAHRENHEIT,
-    TEMP_UNITS_COUNT // Sentinel - keep last
-  } TempUnits;
-
-  typedef enum {
-    DISTANCE_UNITS_METRIC,
-    DISTANCE_UNITS_IMPERIAL,
-    DISTANCE_UNITS_COUNT // Sentinel - keep last
-  } DistanceUnits;
-
-  typedef enum {
-    STARTUP_SOUND_DISABLED,
-    STARTUP_SOUND_BEEP,
-    STARTUP_SOUND_MELODY,
-    STARTUP_SOUND_COUNT // Sentinel - keep last
-  } StartupSoundOptions;
-
-  typedef enum {
-    BATTERY_DISPLAY_PERCENT,
-    BATTERY_DISPLAY_VOLTAGE,
-  } BoardBatteryDisplayOption;
-
-  typedef enum {
-    SECONDARY_STAT_DUTY,
-    SECONDARY_STAT_TEMPS,
-    SECONDARY_STAT_DISTANCE,
-  } SecondaryStatDisplayOption;
-
-  typedef enum {
-    POCKET_MODE_DISABLED,
-    POCKET_MODE_ENABLED,
-  } PocketModeOptions;
-
-  typedef enum {
-    DOUBLE_PRESS_ACTION_NONE,
-    DOUBLE_PRESS_ACTION_OPEN_MENU,
-    DOUBLE_PRESS_ACTION_COUNT // Sentinel - keep last
-  } StatsDoublePressAction;
-
-  // HbmModeOptions lives in display.h (included above) alongside the HBM
-  // functions, and LedModeOptions in led.h - same reason.
-
 #define DEFAULT_PAIRING_SECRET_CODE -1
-#define MAX_PAIRED_DEVICES 5
-
-  typedef struct {
-    uint8_t mac[ESP_NOW_ETH_ALEN];
-    uint8_t channel;
-    uint32_t secret_code;
-    uint8_t vehicle_type;
-  } PairedDevice;
-
-  typedef struct {
-    uint32_t secret_code;
-    // Selected/default device (for compatibility with existing code paths)
-    uint8_t remote_addr[ESP_NOW_ETH_ALEN];
-    uint8_t channel;
-    // Multi-device support
-    PairedDevice devices[MAX_PAIRED_DEVICES];
-    uint8_t device_count; // number of valid entries in devices
-    int8_t default_index; // -1 if none selected
-  } PairingSettings;
-
-  typedef struct {
-    uint16_t x_min;
-    uint16_t x_max;
-    uint16_t y_min;
-    uint16_t y_max;
-    uint16_t x_center;
-    uint16_t y_center;
-    uint16_t deadband;
-    bool invert_y;
-    bool invert_x;
-    float expo;
-  } CalibrationSettings;
-
-#define INPUT_PIN_DISABLED (-1)
-
-  // Runtime input pins, defaulting to the board's build flags
-  typedef struct InputPinSettings {
-    int8_t js_x_gpio;          // GPIO used for the X axis (must be ADC capable)
-    int8_t js_y_gpio;          // GPIO used for the Y axis (must be ADC capable)
-    int8_t btn1_gpio;          // GPIO used for the primary button
-    uint8_t btn1_active_level; // 0: active low (switch), 1: active high (ps5)
-  } InputPinSettings;
-
   // The assignment baked in at build time
   void input_pins_load_defaults(InputPinSettings *out);
 
-  typedef struct {
-    float accel_x_offset;
-    float accel_y_offset;
-    float accel_z_offset;
-    bool invert_x;
-    bool invert_y;
-    bool invert_z;
-    bool swap_xy;
-  } ImuCalibrationSettings;
-
-  typedef struct {
-    uint8_t bl_level;
-    ScreenRotation screen_rotation;
-    AutoOffOptions auto_off_time;
-    TempUnits temp_units;
-    DistanceUnits distance_units;
-    StartupSoundOptions startup_sound;
-    uint32_t theme_color;
-
-    BoardBatteryDisplayOption battery_display;
-    SecondaryStatDisplayOption secondary_stat_display;
-    PocketModeOptions pocket_mode;
-    StatsDoublePressAction double_press_action;
-    HbmModeOptions hbm_mode;
-    LedModeOptions led_mode;
-  } DeviceSettings;
-
   uint64_t get_auto_off_ms();
   bool is_pocket_mode_enabled();
-
-  // The option list backing a settings dropdown. `labels` is indexed by the
-  // setting's enum value, so the UI never needs to know the enum ordering.
-  typedef struct {
-    const char *const *labels;
-    uint8_t count;
-  } SettingOptions;
 
   SettingOptions settings_double_press_options();
   SettingOptions settings_rotation_options();
@@ -212,6 +78,9 @@ extern "C"
   extern ImuCalibrationSettings imu_calibration;
 
   void save_imu_calibration();
+  void settings_apply_imu_calibration(const ImuCalibrationSettings *imu);
+  // Persists new paired boards and reconnects to the default one.
+  esp_err_t settings_replace_pairing(const PairedDevice *devices, uint8_t count, int8_t default_index);
 
   // Returns true if the given mac matches any paired device
   bool is_paired_mac(const uint8_t *mac);
@@ -238,6 +107,4 @@ extern "C"
 
 #ifdef __cplusplus
 }
-#endif
-
 #endif

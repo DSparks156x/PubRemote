@@ -47,9 +47,14 @@ export interface CommandInfo {
   hint?: string;
 }
 
-// The part of the GitHub releases API response the tool reads.
 export interface GitHubRelease {
+  name: string;
   tag_name: string;
-  name: string | null;
-  assets: { name: string; browser_download_url: string }[];
+  published_at: string;
+  prerelease: boolean;
+  assets: Array<{
+    name: string;
+    browser_download_url: string;
+    url: string;
+  }>;
 }
