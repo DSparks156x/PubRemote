@@ -218,6 +218,7 @@ export global UiState {
 
     // --- Boot notice (set by firmware when recovering from a crash) ---
     in-out property <string> boot-notice: "";
+    in-out property <bool> calibration-prompt: false;
 
     // --- Confirm Dialog ---
     in-out property <bool> show-confirm-dialog: false;
@@ -674,5 +675,18 @@ export component AppWindow inherits Window {
         confirm-text: "OK";
         show-cancel: false;
         confirmed => { UiState.boot-notice = ""; }
+    }
+
+    // Shown each boot until calibrated
+    if UiState.calibration-prompt && UiState.boot-notice == "": ConfirmDialog {
+        title: "Welcome to Pubmote";
+        message: "Set up your remote, starting with joystick calibration, then review your settings in the menu.";
+        confirm-text: "Get started";
+        cancel-text: "Later";
+        confirmed => {
+            UiState.calibration-prompt = false;
+            UiState.screen = Screen.input-calibration;
+        }
+        cancelled => { UiState.calibration-prompt = false; }
     }
 }

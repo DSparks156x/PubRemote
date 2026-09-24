@@ -5,13 +5,18 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "espnow.h"
+#include "input_settings.h"
 #include "nvs_flash.h"
+#include "powermanagement.h"
 #include "remote/adc.h"
 #include "remote/remoteinputs.h"
+#include "settings_api.h"
 #include "stats.h"
 #include "string.h"
 #include <colors.h>
 #include <stdio.h>
+
+_Static_assert(PAIRED_MAC_BYTES == ESP_NOW_ETH_ALEN, "Paired device layout is persisted as a blob");
 
 static const char *TAG = "PUBREMOTE-SETTINGS";
 
@@ -21,7 +26,6 @@ static const char *TAG = "PUBREMOTE-SETTINGS";
 #define BL_LEVEL_DEFAULT 200
 #define SCREEN_ROTATION_KEY "screen_rotation"
 #define AUTO_OFF_TIME_KEY "auto_off_time"
-#define EXPO_ADJUST_FACTOR 100 // Stored as 2dp int
 
 static const AutoOffOptions DEFAULT_AUTO_OFF_TIME = AUTO_OFF_5_MINUTES;
 static const uint8_t DEFAULT_PEER_ADDR[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -361,8 +365,7 @@ static esp_err_t nvs_read(const char *key, void *value, nvs_type_t type, size_t 
   case ESP_OK:
     ESP_LOGI(TAG, "Read done");
     break;
-  case ESP_ERR_NVS_NOT_FOUND:
-    ESP_LOGE(TAG, "The value is not initialized yet!");
+  case ESP_ERR_NVS_NOT_FOUND: // Never saved; callers fall back to defaults
     break;
   default:
     ESP_LOGE(TAG, "Error (%s) reading!", esp_err_to_name(err));
@@ -404,20 +407,6 @@ esp_err_t reset_all_settings() {
   return nvs_flash_erase();
 }
 
-// Falls back when the key is missing or the value can't be a GPIO at all
-static int8_t read_pin_setting(const char *key, int8_t fallback) {
-  uint32_t raw = 0;
-  if (nvs_read_int(key, &raw) != ESP_OK) {
-    return fallback;
-  }
-  int32_t value = (int32_t)raw;
-  if (value < INPUT_PIN_DISABLED || value >= GPIO_NUM_MAX) {
-    ESP_LOGE(TAG, "Stored pin '%s' out of range (%ld)", key, (long)value);
-    return fallback;
-  }
-  return (int8_t)value;
-}
-
 static uint8_t get_auto_off_time_minutes() {
   switch (device_settings.auto_off_time) {
   case AUTO_OFF_DISABLED:
@@ -445,78 +434,16 @@ bool is_pocket_mode_enabled() {
   return device_settings.pocket_mode == POCKET_MODE_ENABLED;
 }
 
-// Dropdown option labels. Each table is indexed by its enum value and asserted
-// against that enum's _COUNT, so extending an enum without adding a label fails
-// the build instead of silently shifting what the UI saves.
-#define DEFINE_SETTING_OPTIONS(fn_name, table, count_sentinel)                                                         \
-  _Static_assert(sizeof(table) / sizeof((table)[0]) == (count_sentinel), #table " out of sync with " #count_sentinel); \
-  SettingOptions fn_name() {                                                                                           \
-    SettingOptions options = {.labels = table, .count = sizeof(table) / sizeof((table)[0])};                           \
-    return options;                                                                                                    \
-  }
-
-static const char *const DOUBLE_PRESS_LABELS[] = {"None", "Open menu"};
-DEFINE_SETTING_OPTIONS(settings_double_press_options, DOUBLE_PRESS_LABELS, DOUBLE_PRESS_ACTION_COUNT)
-
-static const char *const ROTATION_LABELS[] = {"None", "90 degrees", "180 degrees", "270 degrees"};
-DEFINE_SETTING_OPTIONS(settings_rotation_options, ROTATION_LABELS, SCREEN_ROTATION_COUNT)
-
-static const char *const AUTO_OFF_LABELS[] = {"Disabled",   "2 minutes",  "5 minutes",
-                                              "10 minutes", "20 minutes", "30 minutes"};
-DEFINE_SETTING_OPTIONS(settings_auto_off_options, AUTO_OFF_LABELS, AUTO_OFF_COUNT)
-
-static const char *const TEMP_UNITS_LABELS[] = {"Celsius", "Fahrenheit"};
-DEFINE_SETTING_OPTIONS(settings_temp_units_options, TEMP_UNITS_LABELS, TEMP_UNITS_COUNT)
-
-static const char *const DISTANCE_UNITS_LABELS[] = {"Kilometers", "Miles"};
-DEFINE_SETTING_OPTIONS(settings_distance_units_options, DISTANCE_UNITS_LABELS, DISTANCE_UNITS_COUNT)
-
-static const char *const STARTUP_SOUND_LABELS[] = {"Disabled", "Beep", "Melody"};
-DEFINE_SETTING_OPTIONS(settings_startup_sound_options, STARTUP_SOUND_LABELS, STARTUP_SOUND_COUNT)
-
 void save_device_settings() {
-  nvs_write_int(BL_LEVEL_KEY, device_settings.bl_level);
-  nvs_write_int(SCREEN_ROTATION_KEY, device_settings.screen_rotation);
-  nvs_write_int(AUTO_OFF_TIME_KEY, device_settings.auto_off_time);
-  nvs_write_int("temp_units", device_settings.temp_units);
-  nvs_write_int("distance_units", device_settings.distance_units);
-  nvs_write_int("startup_sound", device_settings.startup_sound);
-  nvs_write_int("theme_color", device_settings.theme_color);
-
-  nvs_write_int("battery_display", device_settings.battery_display);
-  nvs_write_int("sec_stat_disp", device_settings.secondary_stat_display);
-  nvs_write_int("pocket_mode", device_settings.pocket_mode);
-  nvs_write_int("stats_dp", device_settings.double_press_action);
-  nvs_write_int("hbm_mode", device_settings.hbm_mode);
-  nvs_write_int("led_mode", device_settings.led_mode);
+  reset_sleep_timer();
+  esp_err_t result = settings_save_device_preferences();
+  if (result != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to save device settings: %s", esp_err_to_name(result));
+  }
 }
 
 esp_err_t save_wifi_ssid(const char *ssid) {
-  ESP_LOGI(TAG, "Saving Wi-Fi SSID: %s", ssid);
-  int ssid_length = strlen(ssid);
-
-  esp_err_t err = ESP_OK;
-
-  if (ssid_length > 32) {
-    ESP_LOGE(TAG, "SSID must be less than 33 characters");
-    return ESP_ERR_INVALID_ARG;
-  }
-
-  err = nvs_write_str("wifi_ssid", ssid);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Error saving SSID! SSID: %s", ssid);
-    return err;
-  }
-
-  err = nvs_write_int("wifi_ssid_l", ssid_length);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Error saving SSID length! Length: %d", ssid_length);
-    return err;
-  }
-
-  ESP_LOGI(TAG, "Wi-Fi credentials saved successfully.");
-
-  return ESP_OK;
+  return settings_save_string("wifi_ssid", ssid);
 }
 
 bool set_current_default_device_secret(uint32_t secret_code) {
@@ -535,36 +462,16 @@ bool set_current_default_device_secret(uint32_t secret_code) {
 }
 
 esp_err_t save_wifi_password(const char *password) {
-  ESP_LOGI(TAG, "Saving Wi-Fi password: %s", password);
-  int password_length = strlen(password);
-  esp_err_t err = ESP_OK;
-
-  if (password_length > 64) {
-    ESP_LOGE(TAG, "SSID must be less than 65 characters");
-    return ESP_ERR_INVALID_ARG;
-  }
-
-  err = nvs_write_str("wifi_password", password);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Error saving password! Password: %s", password);
-    return err;
-  }
-
-  err = nvs_write_int("wifi_key_l", password_length);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Error saving password length! Length: %d", password_length);
-    return err;
-  }
-
-  ESP_LOGI(TAG, "Wi-Fi credentials saved successfully.");
-
-  return ESP_OK;
+  return settings_save_string("wifi_password", password);
 }
 
 char *get_wifi_ssid() {
   int ssid_length = 0;
   esp_err_t err = nvs_read_int("wifi_ssid_l", (uint32_t *)&ssid_length);
-  if (err != ESP_OK || ssid_length <= 0 || ssid_length > 32) {
+  if (err == ESP_ERR_NVS_NOT_FOUND || (err == ESP_OK && ssid_length == 0)) {
+    return NULL;
+  }
+  if (err != ESP_OK || ssid_length < 0 || ssid_length > WIFI_SSID_MAX_BYTES) {
     ESP_LOGE(TAG, "Error reading SSID length: %s", esp_err_to_name(err));
     return NULL;
   }
@@ -577,7 +484,7 @@ char *get_wifi_ssid() {
     return NULL;
   }
 
-  static char final_ssid[33]; // Static to ensure it remains valid after function returns
+  static char final_ssid[WIFI_SSID_MAX_BYTES + 1]; // Static to ensure it remains valid after function returns
   if (required_size > sizeof(final_ssid)) {
     ESP_LOGE(TAG, "SSID size exceeds buffer size!");
     return NULL;
@@ -591,7 +498,10 @@ char *get_wifi_ssid() {
 char *get_wifi_password() {
   int password_length = 0;
   esp_err_t err = nvs_read_int("wifi_key_l", (uint32_t *)&password_length);
-  if (err != ESP_OK || password_length <= 0 || password_length > 64) {
+  if (err == ESP_ERR_NVS_NOT_FOUND || (err == ESP_OK && password_length == 0)) {
+    return NULL;
+  }
+  if (err != ESP_OK || password_length < 0 || password_length > WIFI_PASSWORD_MAX_BYTES) {
     ESP_LOGE(TAG, "Error reading password length: %s", esp_err_to_name(err));
     return NULL;
   }
@@ -604,7 +514,7 @@ char *get_wifi_password() {
     return NULL;
   }
 
-  static char final_password[65]; // Static to ensure it remains valid after function returns
+  static char final_password[WIFI_PASSWORD_MAX_BYTES + 1]; // Static to ensure it remains valid after function returns
   if (required_size > sizeof(final_password)) {
     ESP_LOGE(TAG, "Password size exceeds buffer size!");
     return NULL;
@@ -652,16 +562,10 @@ esp_err_t save_pairing_data() {
 }
 
 void save_input_calibration() {
-  nvs_write_int("x_min", calibration_settings.x_min);
-  nvs_write_int("x_max", calibration_settings.x_max);
-  nvs_write_int("y_min", calibration_settings.y_min);
-  nvs_write_int("y_max", calibration_settings.y_max);
-  nvs_write_int("x_center", calibration_settings.x_center);
-  nvs_write_int("y_center", calibration_settings.y_center);
-  nvs_write_int("deadband", calibration_settings.deadband);
-  nvs_write_int("expo", (int)(calibration_settings.expo * EXPO_ADJUST_FACTOR));
-  nvs_write_int("invert_x", calibration_settings.invert_x);
-  nvs_write_int("invert_y", calibration_settings.invert_y);
+  esp_err_t result = settings_store_input_state(&input_pin_settings, &calibration_settings);
+  if (result != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to save input calibration: %s", esp_err_to_name(result));
+  }
 }
 
 void input_pins_load_defaults(InputPinSettings *out) {
@@ -685,28 +589,8 @@ void input_pins_load_defaults(InputPinSettings *out) {
 #endif
 }
 
-void save_input_pins() {
-  nvs_write_int("js_x_gpio", (uint32_t)(int32_t)input_pin_settings.js_x_gpio);
-  nvs_write_int("js_y_gpio", (uint32_t)(int32_t)input_pin_settings.js_y_gpio);
-  nvs_write_int("btn1_gpio", (uint32_t)(int32_t)input_pin_settings.btn1_gpio);
-  nvs_write_int("btn1_level", input_pin_settings.btn1_active_level ? 1 : 0);
-}
-
 void reset_axis_calibration(bool reset_x, bool reset_y) {
-  if (reset_x) {
-    calibration_settings.x_min = STICK_MIN_VAL;
-    calibration_settings.x_max = STICK_MAX_VAL;
-    calibration_settings.x_center = STICK_MID_VAL;
-  }
-  if (reset_y) {
-    calibration_settings.y_min = STICK_MIN_VAL;
-    calibration_settings.y_max = STICK_MAX_VAL;
-    calibration_settings.y_center = STICK_MID_VAL;
-  }
-  if (reset_x || reset_y) {
-    calibration_settings.deadband = STICK_DEADBAND;
-    save_input_calibration();
-  }
+  settings_reset_calibration(&calibration_settings, reset_x, reset_y);
 }
 
 void save_imu_calibration() {
@@ -717,6 +601,45 @@ void save_imu_calibration() {
   nvs_write_int("imu_inv_y", imu_calibration.invert_y ? 1 : 0);
   nvs_write_int("imu_inv_z", imu_calibration.invert_z ? 1 : 0);
   nvs_write_int("imu_swap_xy", imu_calibration.swap_xy ? 1 : 0);
+}
+
+void settings_apply_imu_calibration(const ImuCalibrationSettings *imu) {
+  imu_calibration = *imu;
+  save_imu_calibration();
+}
+
+esp_err_t settings_replace_pairing(const PairedDevice *devices, uint8_t count, int8_t default_index) {
+  for (uint8_t i = 0; i < pairing_settings.device_count; ++i) {
+    bool kept = false;
+    for (uint8_t j = 0; j < count && !kept; ++j) {
+      kept = is_same_mac(pairing_settings.devices[i].mac, (uint8_t *)devices[j].mac);
+    }
+    if (!kept) {
+      esp_now_del_peer(pairing_settings.devices[i].mac);
+    }
+  }
+  memset(pairing_settings.devices, 0, sizeof(pairing_settings.devices));
+  memcpy(pairing_settings.devices, devices, count * sizeof(PairedDevice));
+  pairing_settings.device_count = count;
+  if (default_index >= 0) {
+    set_default_device_index(default_index);
+  }
+  else {
+    pairing_settings.default_index = -1;
+    memcpy(pairing_settings.remote_addr, DEFAULT_PEER_ADDR, sizeof(DEFAULT_PEER_ADDR));
+    pairing_settings.channel = 1;
+    pairing_settings.secret_code = DEFAULT_PAIRING_SECRET_CODE;
+  }
+  esp_err_t err = save_pairing_data();
+  connection_refresh_pairing_state();
+  if (pairing_state == PAIRING_STATE_PAIRED) {
+    connection_switch_comms_mode(settings_get_active_comms_mode());
+    connection_connect_to_default_peer();
+  }
+  else {
+    connection_update_state(CONNECTION_STATE_DISCONNECTED);
+  }
+  return err;
 }
 
 // Function to initialize NVS
@@ -743,6 +666,10 @@ esp_err_t settings_init() {
 
   // Temporary value to store read settings
   uint32_t temp_setting_value;
+  // Migrate stored settings here when the settings version changes.
+  if (nvs_read_int("settings_version", &temp_setting_value) != ESP_OK || temp_setting_value != SETTINGS_VERSION) {
+    nvs_write_int("settings_version", SETTINGS_VERSION);
+  }
   device_settings.bl_level =
       nvs_read_int(BL_LEVEL_KEY, &temp_setting_value) == ESP_OK ? (uint8_t)temp_setting_value : BL_LEVEL_DEFAULT;
 
@@ -800,35 +727,10 @@ esp_err_t settings_init() {
     device_settings.led_mode = DEFAULT_LED_MODE;
   }
 
-  // Reading calibration settings
-  calibration_settings.x_min =
-      nvs_read_int("x_min", &temp_setting_value) == ESP_OK ? (uint16_t)temp_setting_value : STICK_MIN_VAL;
-  calibration_settings.x_max =
-      nvs_read_int("x_max", &temp_setting_value) == ESP_OK ? (uint16_t)temp_setting_value : STICK_MAX_VAL;
-
-  calibration_settings.y_min =
-      nvs_read_int("y_min", &temp_setting_value) == ESP_OK ? (uint16_t)temp_setting_value : STICK_MIN_VAL;
-
-  calibration_settings.y_max =
-      nvs_read_int("y_max", &temp_setting_value) == ESP_OK ? (uint16_t)temp_setting_value : STICK_MAX_VAL;
-
-  calibration_settings.x_center =
-      nvs_read_int("x_center", &temp_setting_value) == ESP_OK ? (uint16_t)temp_setting_value : STICK_MID_VAL;
-
-  calibration_settings.y_center =
-      nvs_read_int("y_center", &temp_setting_value) == ESP_OK ? (uint16_t)temp_setting_value : STICK_MID_VAL;
-
-  calibration_settings.deadband =
-      nvs_read_int("deadband", &temp_setting_value) == ESP_OK ? (uint16_t)temp_setting_value : STICK_DEADBAND;
-
-  calibration_settings.expo =
-      nvs_read_int("expo", &temp_setting_value) == ESP_OK ? (float)temp_setting_value / EXPO_ADJUST_FACTOR : STICK_EXPO;
-
-  calibration_settings.invert_x =
-      nvs_read_int("invert_x", &temp_setting_value) == ESP_OK ? (bool)temp_setting_value : INVERT_X_AXIS;
-
-  calibration_settings.invert_y =
-      nvs_read_int("invert_y", &temp_setting_value) == ESP_OK ? (bool)temp_setting_value : INVERT_Y_AXIS;
+  calibration_settings.expo = STICK_EXPO;
+  calibration_settings.invert_x = INVERT_X_AXIS;
+  calibration_settings.invert_y = INVERT_Y_AXIS;
+  settings_reset_calibration(&calibration_settings, true, true);
 
   // Adopt a stored assignment only if it still validates, so a stale mapping
   // can't leave the remote without inputs
@@ -836,12 +738,10 @@ esp_err_t settings_init() {
   input_pins_load_defaults(&stored_pins);
   input_pin_settings = stored_pins;
 
-  stored_pins.js_x_gpio = read_pin_setting("js_x_gpio", stored_pins.js_x_gpio);
-  stored_pins.js_y_gpio = read_pin_setting("js_y_gpio", stored_pins.js_y_gpio);
-  stored_pins.btn1_gpio = read_pin_setting("btn1_gpio", stored_pins.btn1_gpio);
-  stored_pins.btn1_active_level = nvs_read_int("btn1_level", &temp_setting_value) == ESP_OK
-                                      ? (temp_setting_value ? 1 : 0)
-                                      : stored_pins.btn1_active_level;
+  CalibrationSettings stored_calibration;
+  if (settings_load_input_state(&stored_pins, &stored_calibration) == ESP_OK) {
+    calibration_settings = stored_calibration;
+  }
 
   char pin_err[96];
   if (input_pins_validate(&stored_pins, pin_err, sizeof(pin_err)) == ESP_OK) {
@@ -849,6 +749,7 @@ esp_err_t settings_init() {
   }
   else {
     ESP_LOGE(TAG, "Stored input pins rejected (%s) - using board defaults", pin_err);
+    settings_reset_calibration(&calibration_settings, true, true);
   }
   ESP_LOGI(TAG, "Input pins: js_x=%d js_y=%d btn=%d (level %u)", input_pin_settings.js_x_gpio,
            input_pin_settings.js_y_gpio, input_pin_settings.btn1_gpio, input_pin_settings.btn1_active_level);
