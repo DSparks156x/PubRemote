@@ -38,6 +38,7 @@
 #include "screens/stats_screen.h"
 #include "screens/tetris_screen.h"
 #include "screens/update_screen.h"
+#include "screens/whack_screen.h"
 #include "settings.h"
 #include "slint-esp.h"
 #include "stats.h"
@@ -291,6 +292,7 @@ extern "C"
   void handle_open_games();
   void handle_games_tetris();
   void handle_games_flappy();
+  void handle_games_whack();
   void handle_games_back();
   void handle_tetris_tick();
   void handle_tetris_press(int zone);
@@ -301,6 +303,9 @@ extern "C"
   void handle_flappy_tick();
   void handle_flappy_flap();
   void handle_flappy_back();
+  void handle_whack_tick();
+  void handle_whack_hit();
+  void handle_whack_back();
 }
 
 #include <algorithm>
@@ -391,6 +396,9 @@ static void connect_callbacks() {
       else if (prev == Screen::Flappy) {
         teardown_flappy_properties();
       }
+      else if (prev == Screen::Whack) {
+        teardown_whack_properties();
+      }
 
       // Drops the outgoing screen's claims
       input_router_restore_defaults();
@@ -432,6 +440,9 @@ static void connect_callbacks() {
       else if (screen == Screen::Flappy) {
         setup_flappy_properties();
       }
+      else if (screen == Screen::Whack) {
+        setup_whack_properties();
+      }
     }
   });
 
@@ -467,6 +478,7 @@ static void connect_callbacks() {
   state.on_open_games([]() { handle_open_games(); });
   state.on_games_tetris([]() { handle_games_tetris(); });
   state.on_games_flappy([]() { handle_games_flappy(); });
+  state.on_games_whack([]() { handle_games_whack(); });
   state.on_games_back([]() { handle_games_back(); });
   state.on_tetris_tick([]() { handle_tetris_tick(); });
   state.on_tetris_press([](int zone) { handle_tetris_press(zone); });
@@ -477,6 +489,9 @@ static void connect_callbacks() {
   state.on_flappy_tick([]() { handle_flappy_tick(); });
   state.on_flappy_flap([]() { handle_flappy_flap(); });
   state.on_flappy_back([]() { handle_flappy_back(); });
+  state.on_whack_tick([]() { handle_whack_tick(); });
+  state.on_whack_hit([]() { handle_whack_hit(); });
+  state.on_whack_back([]() { handle_whack_back(); });
 
   const auto &color_slider_gen = slint_window->global<ColorSliderGenerator>();
   color_slider_gen.on_generate_track(generate_color_slider_track);
